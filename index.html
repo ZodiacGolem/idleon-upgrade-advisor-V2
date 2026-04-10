@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>IdleOn Upgrade Advisor</title>
+  <meta name="description" content="Analyze a public IdleOn profile and get upgrade recommendations.">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -23,7 +24,11 @@
         <h2>Load Profile</h2>
 
         <label for="profileInput">Profile URL or slug</label>
-        <input id="profileInput" type="text" placeholder="playername or https://playername.idleonefficiency.com">
+        <input
+          id="profileInput"
+          type="text"
+          placeholder="playername or https://playername.idleonefficiency.com"
+        >
 
         <div class="button-row">
           <button id="analyzeBtn">Analyze Profile</button>
@@ -33,7 +38,11 @@
 
         <details class="json-box">
           <summary>Paste Raw JSON instead</summary>
-          <textarea id="jsonInput" rows="12" placeholder="Paste raw JSON here"></textarea>
+          <textarea
+            id="jsonInput"
+            rows="12"
+            placeholder="Paste raw JSON here"
+          ></textarea>
         </details>
 
         <div class="help-box">
@@ -93,13 +102,14 @@
           <section class="panel">
             <div class="section-head">
               <h3>Recommendations</h3>
+
               <div class="toolbar">
                 <div class="filter-row">
-                  <button class="filter-btn active" data-filter="all">All</button>
-                  <button class="filter-btn" data-filter="Stamps">Stamps</button>
-                  <button class="filter-btn" data-filter="Bubbles">Bubbles</button>
-                  <button class="filter-btn" data-filter="Alchemy P2W">Alchemy</button>
-                  <button class="filter-btn" data-filter="Library">Library</button>
+                  <button class="filter-btn active" data-filter="all" type="button">All</button>
+                  <button class="filter-btn" data-filter="Stamps" type="button">Stamps</button>
+                  <button class="filter-btn" data-filter="Bubbles" type="button">Bubbles</button>
+                  <button class="filter-btn" data-filter="Alchemy P2W" type="button">Alchemy</button>
+                  <button class="filter-btn" data-filter="Library" type="button">Library</button>
                 </div>
 
                 <select id="sortSelect" class="sort-select">
