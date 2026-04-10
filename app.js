@@ -72,174 +72,446 @@ async function fetchProfileJson(profileInput) {
   }
 }
 
-function scoreRecommendations(data) {
-  const recs = [];
-  let dataSourcesFound = 0;
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
 
+function average(nums) {
+  if (!nums.length) return 0;
+  return nums.reduce((a, b) => a + b, 0) / nums.length;
+}
+
+function scoreFormula({
+  impact,
+  effort,
+  urgency = 0,
+  accountWide = 0,
+  catchUp = 0,
+  confidence = 7
+}) {
+  return Math.round(
+    impact * 8 +
+    accountWide * 6 +
+    urgency * 5 +
+    catchUp * 4 +
+    confidence * 2 -
+    effort * 6
+  );
+}
+
+function inferStage(data) {
   const p2w = getNested(data, ["CauldronP2W"], []);
-  if (Array.isArray(p2w) && p2w.length >= 3) {
-    dataSourcesFound++;
-    const cauld = Array.isArray(p2w[0]) ? p2w[0] : [];
-    const liq = Array.isArray(p2w[1]) ? p2w[1] : [];
-    const vial = Array.isArray(p2w[2]) ? p2w[2] : [];
+  const cauld = Array.isArray(p2w[0]) ? p2w[0] : [];
+  const bubbleLevels = getNested(data, ["CauldronInfo"], [])
+    .slice(0, 4)
+    .flatMap(group => group && typeof group === "object"
+      ? Object.entries(group)
+          .filter(([k]) => k !== "length")
+          .map(([, v]) => Number(v))
+      : []
+    );
 
-    ["Power", "Quicc", "High-IQ", "Kazam"].forEach((name, idx) => {
-      const base = idx * 3;
-      const values = base + 2 < cauld.length ? cauld.slice(base, base + 3) : [0, 0, 0];
+  const stampLevels = getNested(data, ["StampLv"], [])
+    .flatMap(group => group && typeof group === "object"
+      ? Object.entries(group)
+          .filter(([k]) => k !== "length")
+          .map(([, v]) => Number(v))
+      : []
+    );
 
-      [
-        ["Cauldron Speed", Number(values[0]), 150, 9],
-        ["New Bubble", Number(values[1]), 125, 9],
-        ["Boost Req", Number(values[2]), 100, 6]
-      ].forEach(([label, level, cap, impact]) => {
-        const gap = Math.max(0, cap - level);
-        if (!gap) return;
+  const avgCauld = average(cauld.map(Number).filter(n => Number.isFinite(n)));
+  const avgBubble = average(bubbleLevels.filter(n => Number.isFinite(n)));
+  const avgStamp = average(stampLevels.filter(n => Number.isFinite(n)));
 
-        const effort = level < cap * 0.5 ? 2 : level < cap * 0.8 ? 4 : 6;
-        const score = impact * 10 - effort * 3 + Math.min(gap, 25);
+  const stageScore = avgCauld * 0.5 + avgBubble * 1.2 + avgStamp * 0.9;
 
-        recs.push({
-          title: `${name} ${label}`,
-          category: "Alchemy P2W",
-          impact,
-          effort,
-          confidence: 9,
-          score,
-          why: `${label} is below cap (${level}/${cap}) and usually improves broad account progression.`
-        });
+  if (stageScore < 22) return "early";
+  if (stageScore < 50) return "mid";
+  return "late";
+}
+
+function buildAlchemyP2WRecs(data, stage) {
+  const recs = [];
+  const p2w = getNested(data, ["CauldronP2W"], []);
+  if (!Array.isArray(p2w) || p2w.length < 3) return recs;
+
+  const cauld = Array.isArray(p2w[0]) ? p2w[0] : [];
+  const liq = Array.isArray(p2w[1]) ? p2w[1] : [];
+  const vial = Array.isArray(p2w[2]) ? p2w[2] : [];
+
+  const stageImpactBoost = {
+    early: 1.15,
+    mid: 1.0,
+    late: 0.9
+  }[stage];
+
+  ["Power", "Quicc", "High-IQ", "Kazam"].forEach((name, idx) => {
+    const base = idx * 3;
+    const values = base + 2 < cauld.length ? cauld.slice(base, base + 3).map(Number) : [0, 0, 0];
+
+    [
+      {
+        label: "Cauldron Speed",
+        level: values[0],
+        cap: 150,
+        impact: 9.5,
+        accountWide: 9.5,
+        preferredBelow: 110
+      },
+      {
+        label: "New Bubble",
+        level: values[1],
+        cap: 125,
+        impact: 9.2,
+        accountWide: 9.0,
+        preferredBelow: 95
+      },
+      {
+        label: "Boost Req",
+        level: values[2],
+        cap: 100,
+        impact: 6.5,
+        accountWide: 7.0,
+        preferredBelow: 75
+      }
+    ].forEach((item) => {
+      const gap = Math.max(0, item.cap - item.level);
+      if (!gap) return;
+
+      const progress = item.level / item.cap;
+      const effort =
+        progress < 0.35 ? 2 :
+        progress < 0.7 ? 3 :
+        progress < 0.9 ? 5 : 7;
+
+      const urgency =
+        item.level < item.preferredBelow ? 8 : 4;
+
+      const catchUp =
+        gap >= item.cap * 0.5 ? 8 :
+        gap >= item.cap * 0.3 ? 6 : 3;
+
+      const score = scoreFormula({
+        impact: item.impact * stageImpactBoost,
+        effort,
+        urgency,
+        accountWide: item.accountWide,
+        catchUp,
+        confidence: 9
+      });
+
+      recs.push({
+        title: `${name} ${item.label}`,
+        category: "Alchemy P2W",
+        impact: Math.round(item.impact),
+        effort,
+        confidence: 9,
+        score,
+        why: `${item.label} is still low at ${item.level}/${item.cap}, and this is one of the broadest account-wide progression upgrades.`,
+        detail: `Gap to cap: ${gap}. Best-effort priority favors broad alchemy progression.`
       });
     });
+  });
 
-    ["Water", "N2", "Trench", "Toxic"].forEach((name, idx) => {
-      const base = idx * 2;
-      const values = base + 1 < liq.length ? liq.slice(base, base + 2) : [0, 0];
+  ["Water", "N2", "Trench", "Toxic"].forEach((name, idx) => {
+    const base = idx * 2;
+    const values = base + 1 < liq.length ? liq.slice(base, base + 2).map(Number) : [0, 0];
 
-      [
-        ["Liquid Regen", Number(values[0]), 100, 7],
-        ["Liquid Capacity", Number(values[1]), 80, 7]
-      ].forEach(([label, level, cap, impact]) => {
-        const gap = Math.max(0, cap - level);
-        if (!gap) return;
+    [
+      {
+        label: "Liquid Regen",
+        level: values[0],
+        cap: 100,
+        impact: 7.8,
+        accountWide: 8.0
+      },
+      {
+        label: "Liquid Capacity",
+        level: values[1],
+        cap: 80,
+        impact: 7.0,
+        accountWide: 7.5
+      }
+    ].forEach((item) => {
+      const gap = Math.max(0, item.cap - item.level);
+      if (!gap) return;
 
-        const effort = level < cap * 0.5 ? 2 : level < cap * 0.8 ? 4 : 6;
-        const score = impact * 10 - effort * 3 + Math.min(gap, 20);
+      const effort =
+        item.level < item.cap * 0.35 ? 2 :
+        item.level < item.cap * 0.75 ? 3 : 5;
 
-        recs.push({
-          title: `${name} ${label}`,
-          category: "Alchemy P2W",
-          impact,
-          effort,
-          confidence: 8,
-          score,
-          why: `${label} is below cap (${level}/${cap}) and helps many systems feel smoother.`
-        });
+      const urgency =
+        gap > item.cap * 0.45 ? 7 :
+        gap > item.cap * 0.2 ? 5 : 3;
+
+      const catchUp =
+        item.level < item.cap * 0.4 ? 8 :
+        item.level < item.cap * 0.7 ? 5 : 2;
+
+      const score = scoreFormula({
+        impact: item.impact,
+        effort,
+        urgency,
+        accountWide: item.accountWide,
+        catchUp,
+        confidence: 8
+      });
+
+      recs.push({
+        title: `${name} ${item.label}`,
+        category: "Alchemy P2W",
+        impact: Math.round(item.impact),
+        effort,
+        confidence: 8,
+        score,
+        why: `${item.label} is behind at ${item.level}/${item.cap}, making your liquid flow worse than it should be.`,
+        detail: `Gap to cap: ${gap}. This tends to smooth many future alchemy upgrades.`
       });
     });
+  });
 
-    if (vial.length >= 2) {
-      [
-        ["Vial Attempts", Number(vial[0]), 15, 6],
-        ["Vial RNG", Number(vial[1]), 45, 5]
-      ].forEach(([label, level, cap, impact]) => {
-        const gap = Math.max(0, cap - level);
-        if (!gap) return;
+  if (vial.length >= 2) {
+    [
+      {
+        label: "Vial Attempts",
+        level: Number(vial[0]),
+        cap: 15,
+        impact: 6.2,
+        accountWide: 6.4
+      },
+      {
+        label: "Vial RNG",
+        level: Number(vial[1]),
+        cap: 45,
+        impact: 5.2,
+        accountWide: 5.5
+      }
+    ].forEach((item) => {
+      const gap = Math.max(0, item.cap - item.level);
+      if (!gap) return;
 
-        const effort = level < cap * 0.5 ? 2 : level < cap * 0.8 ? 4 : 6;
-        const score = impact * 10 - effort * 3 + Math.min(gap, 15);
+      const effort =
+        item.level < item.cap * 0.35 ? 2 :
+        item.level < item.cap * 0.75 ? 3 : 5;
 
-        recs.push({
-          title: label,
-          category: "Alchemy P2W",
-          impact,
-          effort,
-          confidence: 8,
-          score,
-          why: `${label} is below cap (${level}/${cap}) and is often a cheap account-wide upgrade.`
-        });
+      const urgency =
+        item.label === "Vial Attempts" ? 6 : 4;
+
+      const catchUp =
+        gap > item.cap * 0.4 ? 6 : 3;
+
+      const score = scoreFormula({
+        impact: item.impact,
+        effort,
+        urgency,
+        accountWide: item.accountWide,
+        catchUp,
+        confidence: 8
       });
-    }
+
+      recs.push({
+        title: item.label,
+        category: "Alchemy P2W",
+        impact: Math.round(item.impact),
+        effort,
+        confidence: 8,
+        score,
+        why: `${item.label} is below a healthy level at ${item.level}/${item.cap} and is usually a simple account-wide cleanup.`,
+        detail: `Gap to cap: ${gap}.`
+      });
+    });
   }
 
+  return recs;
+}
+
+function buildStampRecs(data, stage) {
+  const recs = [];
   const stampLv = getNested(data, ["StampLv"], []);
   const stampMax = getNested(data, ["StampLvM"], []);
-  if (Array.isArray(stampLv) && Array.isArray(stampMax)) {
-    dataSourcesFound++;
-    stampLv.forEach((tab, tabIndex) => {
-      if (!tab || typeof tab !== "object") return;
 
-      const maxTab = stampMax[tabIndex] && typeof stampMax[tabIndex] === "object"
-        ? stampMax[tabIndex]
-        : {};
+  if (!Array.isArray(stampLv) || !Array.isArray(stampMax)) return recs;
 
-      Object.entries(tab).forEach(([key, value]) => {
-        if (key === "length") return;
+  stampLv.forEach((tab, tabIndex) => {
+    if (!tab || typeof tab !== "object") return;
+    const maxTab = stampMax[tabIndex] && typeof stampMax[tabIndex] === "object"
+      ? stampMax[tabIndex]
+      : {};
 
-        const cur = Number(value);
-        const mx = Number(maxTab[key] ?? cur);
-        const gap = Math.max(0, mx - cur);
+    Object.entries(tab).forEach(([key, value]) => {
+      if (key === "length") return;
 
-        if (cur > 0 && gap > 0 && gap <= 10) {
-          recs.push({
-            title: `Stamp tab ${tabIndex + 1} slot ${key}`,
-            category: "Stamps",
-            impact: 5,
-            effort: 2,
-            confidence: 7,
-            score: 62 + (10 - gap),
-            why: `This stamp is close to its current max (${cur}/${mx}), making it an easy cleanup win.`
-          });
-        }
+      const cur = Number(value);
+      const mx = Number(maxTab[key] ?? cur);
+      const gap = Math.max(0, mx - cur);
+
+      if (cur <= 0 || gap <= 0) return;
+
+      const isEasyFinish = gap <= 3;
+      const isReasonableFinish = gap <= 8;
+      if (!isReasonableFinish) return;
+
+      const effort =
+        gap <= 2 ? 1 :
+        gap <= 4 ? 2 :
+        gap <= 6 ? 3 : 4;
+
+      const impact =
+        tabIndex === 0 ? 5.5 :
+        tabIndex === 1 ? 6.0 : 5.0;
+
+      const urgency =
+        isEasyFinish ? 8 :
+        gap <= 5 ? 6 : 4;
+
+      const catchUp =
+        stage === "early" ? 5 :
+        stage === "mid" ? 6 : 7;
+
+      const score = scoreFormula({
+        impact,
+        effort,
+        urgency,
+        accountWide: 6.5,
+        catchUp,
+        confidence: 7
+      });
+
+      recs.push({
+        title: `Stamp tab ${tabIndex + 1} slot ${key}`,
+        category: "Stamps",
+        impact: Math.round(impact),
+        effort,
+        confidence: 7,
+        score,
+        why: `This stamp is near its current max (${cur}/${mx}), which makes it one of the easier account-wide cleanup wins available.`,
+        detail: `Missing ${gap} levels to current cap.`
       });
     });
-  }
+  });
 
+  return recs;
+}
+
+function buildBubbleRecs(data, stage) {
+  const recs = [];
   const bubbles = getNested(data, ["CauldronInfo"], []);
-  if (Array.isArray(bubbles) && bubbles.length > 0) {
-    dataSourcesFound++;
-    bubbles.slice(0, 4).forEach((group, groupIndex) => {
-      if (!group || typeof group !== "object") return;
+  if (!Array.isArray(bubbles)) return recs;
 
-      Object.entries(group).forEach(([key, value]) => {
-        if (key === "length") return;
+  bubbles.slice(0, 4).forEach((group, groupIndex) => {
+    if (!group || typeof group !== "object") return;
 
-        const lvl = Number(value);
-        if (lvl >= 5 && lvl <= 35) {
-          recs.push({
-            title: `Cauldron ${groupIndex + 1} bubble ${key}`,
-            category: "Bubbles",
-            impact: 5,
-            effort: 3,
-            confidence: 6,
-            score: 58 - Math.abs(20 - lvl),
-            why: "Mid-low bubble levels are often some of the fastest broad progression wins."
-          });
-        }
+    Object.entries(group).forEach(([key, value]) => {
+      if (key === "length") return;
+      const lvl = Number(value);
+
+      if (!Number.isFinite(lvl) || lvl < 1) return;
+
+      let impact = 0;
+      let urgency = 0;
+      let effort = 0;
+
+      if (lvl >= 5 && lvl <= 20) {
+        impact = 7.0;
+        urgency = 8.0;
+        effort = 2;
+      } else if (lvl > 20 && lvl <= 35) {
+        impact = 6.0;
+        urgency = 5.0;
+        effort = 3;
+      } else if (lvl > 35 && lvl <= 50 && stage !== "early") {
+        impact = 4.5;
+        urgency = 3.0;
+        effort = 4;
+      } else {
+        return;
+      }
+
+      const score = scoreFormula({
+        impact,
+        effort,
+        urgency,
+        accountWide: 5.5,
+        catchUp: stage === "early" ? 7 : 5,
+        confidence: 6
+      });
+
+      recs.push({
+        title: `Cauldron ${groupIndex + 1} bubble ${key}`,
+        category: "Bubbles",
+        impact: Math.round(impact),
+        effort,
+        confidence: 6,
+        score,
+        why: `Bubble level ${lvl} is in a range where a few more levels are often still fast, efficient gains.`,
+        detail: `Best-effort bubble recommendation based on level band priority.`
       });
     });
+  });
+
+  return recs;
+}
+
+function dedupeRecommendations(recs) {
+  const seen = new Set();
+  const out = [];
+
+  for (const rec of recs) {
+    const key = `${rec.category}::${rec.title}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(rec);
   }
 
-  recs.sort((a, b) => b.score - a.score);
+  return out;
+}
+
+function rankRecommendations(data) {
+  const stage = inferStage(data);
+
+  const recs = [
+    ...buildAlchemyP2WRecs(data, stage),
+    ...buildStampRecs(data, stage),
+    ...buildBubbleRecs(data, stage)
+  ];
+
+  const deduped = dedupeRecommendations(recs).sort((a, b) => b.score - a.score);
 
   const categoryCounts = {};
-  for (const rec of recs) {
+  for (const rec of deduped) {
     categoryCounts[rec.category] = (categoryCounts[rec.category] || 0) + 1;
   }
+
+  const p2w = getNested(data, ["CauldronP2W"], []);
+  const stampLv = getNested(data, ["StampLv"], []);
+  const bubbles = getNested(data, ["CauldronInfo"], []);
+
+  const dataSourcesFound = [
+    Array.isArray(p2w) && p2w.length >= 3,
+    Array.isArray(stampLv) && stampLv.length > 0,
+    Array.isArray(bubbles) && bubbles.length > 0
+  ].filter(Boolean).length;
 
   const quality = [
     {
       label: "Alchemy P2W data",
       found: Array.isArray(p2w) && p2w.length >= 3,
-      detail: Array.isArray(p2w) && p2w.length >= 3 ? "Detected and used in scoring." : "Missing from payload."
+      detail: Array.isArray(p2w) && p2w.length >= 3 ? "Detected and weighted heavily." : "Missing from payload."
     },
     {
       label: "Stamp data",
       found: Array.isArray(stampLv) && stampLv.length > 0,
-      detail: Array.isArray(stampLv) && stampLv.length > 0 ? "Detected and used in scoring." : "Missing from payload."
+      detail: Array.isArray(stampLv) && stampLv.length > 0 ? "Detected and used for easy-win cleanup logic." : "Missing from payload."
     },
     {
       label: "Bubble data",
       found: Array.isArray(bubbles) && bubbles.length > 0,
-      detail: Array.isArray(bubbles) && bubbles.length > 0 ? "Detected and used in scoring." : "Missing from payload."
+      detail: Array.isArray(bubbles) && bubbles.length > 0 ? "Detected and used for mid-level catch-up logic." : "Missing from payload."
+    },
+    {
+      label: "Estimated account stage",
+      found: true,
+      detail: stage.charAt(0).toUpperCase() + stage.slice(1)
     },
     {
       label: "Overall confidence",
@@ -248,7 +520,7 @@ function scoreRecommendations(data) {
     }
   ];
 
-  return { recs, categoryCounts, quality };
+  return { recs: deduped, categoryCounts, quality, stage };
 }
 
 function renderRecCard(rec, rank = null) {
@@ -259,6 +531,7 @@ function renderRecCard(rec, rank = null) {
           ${rank ? `<div class="pill">#${rank}</div>` : ""}
           <h4 class="rec-title">${rec.title}</h4>
           <div class="muted">${rec.why}</div>
+          ${rec.detail ? `<div class="muted" style="margin-top:8px;font-size:.92rem">${rec.detail}</div>` : ""}
         </div>
         <div class="score-pill">Score ${rec.score}</div>
       </div>
@@ -273,7 +546,7 @@ function renderRecCard(rec, rank = null) {
 }
 
 function renderResults(result) {
-  const { recs, categoryCounts, quality } = result;
+  const { recs, categoryCounts, quality, stage } = result;
   if (!recs.length) {
     throw new Error("No recommendations were produced from this profile.");
   }
@@ -283,7 +556,7 @@ function renderResults(result) {
   $("emptyState").classList.add("hidden");
   $("results").classList.remove("hidden");
 
-  $("primaryCategory").textContent = best.category;
+  $("primaryCategory").textContent = `${best.category} • ${stage}`;
   $("primaryScore").textContent = `Score ${best.score}`;
   $("primaryTitle").textContent = best.title;
   $("primaryWhy").textContent = best.why;
@@ -292,7 +565,7 @@ function renderResults(result) {
   $("primaryConfidence").textContent = best.confidence;
 
   $("kpiTotal").textContent = recs.length;
-  $("kpiEasy").textContent = recs.filter(r => r.effort <= 3).length;
+  $("kpiEasy").textContent = recs.filter(r => r.effort <= 2).length;
   $("kpiCategories").textContent = Object.keys(categoryCounts).length;
   $("kpiBest").textContent = best.score;
 
@@ -352,7 +625,7 @@ async function analyze() {
       throw new Error("Enter a profile URL/slug or paste Raw JSON.");
     }
 
-    const result = scoreRecommendations(data);
+    const result = rankRecommendations(data);
     renderResults(result);
     setStatus(`Loaded ${result.recs.length} recommendations.`, "success");
   } catch (err) {
