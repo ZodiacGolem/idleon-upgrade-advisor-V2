@@ -48,7 +48,7 @@
         <div class="help-box">
           <strong>What this version shows</strong>
           <p>
-            Stamp names, bubble names, library books, library speed, max books, icons, and recommendations sorted by best score.
+            Stamp names, bubble names, books waiting for checkout, library speed, max books, icons, and recommendations sorted by best score.
           </p>
         </div>
 
@@ -78,7 +78,7 @@
               <strong id="kpiEasy">0</strong>
             </div>
             <div class="kpi">
-              <span>Current books</span>
+              <span>Books waiting for checkout</span>
               <strong id="kpiBooks">?</strong>
             </div>
             <div class="kpi">
@@ -87,6 +87,8 @@
             </div>
           </section>
 
+          <section id="bookAlert" class="hidden"></section>
+
           <section class="two-col">
             <div class="panel">
               <h3>Library Overview</h3>
@@ -94,14 +96,27 @@
             </div>
 
             <div class="panel">
-              <h3>Category Breakdown</h3>
-              <div id="categoryBreakdown" class="stack"></div>
+              <h3>Data Quality</h3>
+              <div id="qualityList" class="stack"></div>
             </div>
           </section>
 
           <section class="panel">
             <div class="section-head">
-              <h3>Recommendations</h3>
+              <div>
+                <h3>Top 3 Upgrades</h3>
+                <p id="top3Summary" class="muted section-summary"></p>
+              </div>
+            </div>
+            <div id="top3List" class="stack"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <div>
+                <h3>Recommendations</h3>
+                <p id="recommendationSummary" class="muted section-summary"></p>
+              </div>
 
               <div class="toolbar">
                 <div class="filter-row">
@@ -123,18 +138,6 @@
             </div>
 
             <div id="recommendationList" class="stack"></div>
-          </section>
-
-          <section class="two-col">
-            <div class="panel">
-              <h3>Top 3 Upgrades</h3>
-              <div id="top3List" class="stack"></div>
-            </div>
-
-            <div class="panel">
-              <h3>Data Quality</h3>
-              <div id="qualityList" class="stack"></div>
-            </div>
           </section>
         </div>
       </section>
